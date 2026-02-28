@@ -1,6 +1,7 @@
 {
   "name": "senior-benefits-advisor",
   "version": "1.0.0",
+  "type": "module",
   "description": "Autonomous AI agent for finding senior benefits across the US",
   "private": true,
   "scripts": {
@@ -10,6 +11,8 @@
     "lint": "eslint src --ext js,jsx"
   },
   "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -20,6 +23,6 @@
     "eslint": "^9.9.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.11",
-    "vite": "^5.4.8"
+    "vite": "^7.3.1"
   }
 }
