@@ -1,29 +1,41 @@
-// api/chat.js
-// Vercel Serverless Function — proxies requests to Anthropic.
-// The system prompt is injected here (server-side) with cache_control so
-// Anthropic caches it between calls, cutting costs ~90% on repeat requests.
+/**
+ * api/chat.js
+ * POST /api/chat
+ *
+ * Proxies requests to Anthropic with:
+ *  - Server-side API key injection
+ *  - Prompt caching (saves ~90% on repeat system prompt tokens)
+ *  - Optional auth: if a valid JWT is present, veteran status is read from
+ *    the stored profile so the client does not need to send it manually
+ */
+
+import { authFromHeader } from '../lib/auth.js'
+import { getUserById } from '../lib/db.js'
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' })
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured on the server.' })
+  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' })
+
+  let { messages, system, model, max_tokens } = req.body
+
+  // Optional: enrich from user profile.
+  // If a logged-in user sends a JWT, we read their stored isVeteran flag.
+  const decoded = authFromHeader(req.headers.authorization)
+  if (decoded) {
+    try {
+      const user = await getUserById(decoded.sub)
+      if (user?.isVeteran && !system.includes('VETERAN STATUS')) {
+        system += '\n\nVETERAN STATUS: This user is a verified veteran (from their saved profile). Always include veteran-specific benefits.'
+      }
+    } catch (_) {
+      // Non-fatal
+    }
   }
 
-  const { messages, system, model, max_tokens } = req.body
-
-  // Wrap the system prompt as a content block with cache_control.
-  // Anthropic will cache this on the first call and reuse it for 5–60 min,
-  // charging only 10% of the normal input token cost on cache hits.
   const systemWithCache = [
-    {
-      type: 'text',
-      text: system,
-      cache_control: { type: 'ephemeral' },
-    },
+    { type: 'text', text: system, cache_control: { type: 'ephemeral' } },
   ]
 
   try {
@@ -33,33 +45,22 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'prompt-caching-2024-07-31',   // required to enable caching
+        'anthropic-beta': 'prompt-caching-2024-07-31',
       },
-      body: JSON.stringify({
-        model,
-        max_tokens,
-        system: systemWithCache,
-        messages,
-      }),
+      body: JSON.stringify({ model, max_tokens, system: systemWithCache, messages }),
     })
 
     const data = await response.json()
+    if (!response.ok) return res.status(response.status).json(data)
 
-    if (!response.ok) {
-      return res.status(response.status).json(data)
-    }
-
-    // Log cache stats in server logs so you can verify it's working
     if (data.usage) {
       const u = data.usage
-      console.log(
-        `[cache] input=${u.input_tokens} | cache_read=${u.cache_read_input_tokens ?? 0} | cache_write=${u.cache_creation_input_tokens ?? 0} | output=${u.output_tokens}`
-      )
+      console.log('[cache] input=' + u.input_tokens + ' read=' + (u.cache_read_input_tokens ?? 0) + ' write=' + (u.cache_creation_input_tokens ?? 0) + ' output=' + u.output_tokens)
     }
 
     return res.status(200).json(data)
   } catch (err) {
-    console.error('Proxy error:', err)
-    return res.status(500).json({ error: 'Failed to reach Anthropic API.' })
+    console.error('[chat]', err)
+    return res.status(500).json({ error: 'Failed to reach Anthropic API' })
   }
 }
